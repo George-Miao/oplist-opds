@@ -1,0 +1,7 @@
+/target
+/data
+*.env
+.vscode
+.direnv
+.zed
+AGENTS.md
