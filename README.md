@@ -121,7 +121,7 @@ services:
 
 ### With Nix (recommended)
 
-Produces a scratch Docker image (~10 MB) as a `.tar.gz` archive:
+Produces a scratch Docker image (~16 MB) as a `.tar.gz` archive:
 
 ```sh
 nix build .#oplist-opds-docker

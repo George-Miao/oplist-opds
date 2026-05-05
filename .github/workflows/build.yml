@@ -3,6 +3,10 @@ on:
   push:
     branches:
       - main
+    paths:
+      - /src
+      - /Cargo.*
+      - /flake.*
   workflow_dispatch:
 
 env:
