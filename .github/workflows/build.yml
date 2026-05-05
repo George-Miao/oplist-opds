@@ -4,9 +4,9 @@ on:
     branches:
       - main
     paths:
-      - /src
-      - /Cargo.*
-      - /flake.*
+      - src/**/*
+      - Cargo.*
+      - flake.*
   workflow_dispatch:
 
 env:
