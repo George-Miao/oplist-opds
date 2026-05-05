@@ -68,11 +68,6 @@ impl Link {
         self.length = Some(length);
         self
     }
-
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.title = Some(title.into());
-        self
-    }
 }
 
 /// An entry within a feed (either navigation or acquisition).

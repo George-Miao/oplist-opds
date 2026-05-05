@@ -12,48 +12,26 @@ use crate::{
     openlist::types::FsObject,
 };
 
-/// Build a catalog-root navigation feed with links to Browse and Search.
-pub fn root_feed(base_url: &str, title: &str, updated: &str) -> Feed {
-    let self_url = format!("{base_url}/opds");
-    let browse_url = format!("{base_url}/opds/browse/");
-    let search_url = format!("{base_url}/opds/search");
-    let opensearch_url = format!("{base_url}/opds/opensearch.xml");
-
-    Feed {
-        id: format!("urn:oplist-opds:root"),
-        title: title.to_string(),
-        updated: updated.to_string(),
-        links: vec![
-            Link::new("self", &self_url, TYPE_NAVIGATION),
-            Link::new("start", &self_url, TYPE_NAVIGATION),
-            Link::new(
-                "search",
-                &opensearch_url,
-                "application/opensearchdescription+xml",
-            ),
-        ],
-        entries: vec![
-            Entry {
-                id: "urn:oplist-opds:browse".to_string(),
-                title: "Browse Files".to_string(),
-                updated: updated.to_string(),
-                links: vec![
-                    Link::new("subsection", &browse_url, TYPE_ACQUISITION)
-                        .with_title("Browse Files"),
-                ],
-                summary: Some("Browse the file collection by directory.".to_string()),
-            },
-            Entry {
-                id: "urn:oplist-opds:search".to_string(),
-                title: "Search".to_string(),
-                updated: updated.to_string(),
-                links: vec![
-                    Link::new("search", &search_url, TYPE_ACQUISITION).with_title("Search"),
-                ],
-                summary: Some("Search for files by name.".to_string()),
-            },
-        ],
-    }
+/// Build the OPDS catalog root as the configured OpenList root listing.
+pub fn root_listing_feed(
+    base_url: &str,
+    title: &str,
+    dir_path: &str,
+    objects: Vec<FsObject>,
+    updated: &str,
+    proxy_enabled: bool,
+) -> Feed {
+    directory_feed(
+        base_url,
+        title,
+        dir_path,
+        "",
+        &format!("{base_url}/opds"),
+        objects,
+        updated,
+        proxy_enabled,
+        false,
+    )
 }
 
 /// Build a directory-listing feed from a slice of `FsObject`s.
@@ -64,61 +42,31 @@ pub fn root_feed(base_url: &str, title: &str, updated: &str) -> Feed {
 pub fn browse_feed(
     base_url: &str,
     dir_path: &str,
+    route_path: &str,
     objects: Vec<FsObject>,
     updated: &str,
     proxy_enabled: bool,
 ) -> Feed {
-    let self_url = format!(
-        "{base_url}/opds/browse/{}",
-        dir_path.trim_start_matches('/')
-    );
-    let root_url = format!("{base_url}/opds");
+    let self_url = browse_url(base_url, route_path);
+    let title = last_segment(dir_path).unwrap_or("Root").to_string();
 
-    let _has_dirs = objects.iter().any(|o| o.is_dir);
-    let has_files = objects.iter().any(|o| !o.is_dir);
-    let feed_type = if has_files {
-        TYPE_ACQUISITION
-    } else {
-        TYPE_NAVIGATION
-    };
-
-    // Parent path for "up" link
-    let parent_path = parent_of(dir_path);
-    let up_url = if parent_path.is_empty() || parent_path == "/" {
-        format!("{base_url}/opds/browse/")
-    } else {
-        format!(
-            "{base_url}/opds/browse/{}",
-            parent_path.trim_start_matches('/')
-        )
-    };
-
-    let mut links = vec![
-        Link::new("self", &self_url, feed_type),
-        Link::new("start", &root_url, TYPE_NAVIGATION),
-    ];
-    // Only add "up" if we're not already at the root
-    if dir_path != "/" && !dir_path.is_empty() {
-        links.push(Link::new("up", &up_url, feed_type));
-    }
-
-    let entries = objects
-        .into_iter()
-        .map(|obj| fs_object_to_entry(base_url, dir_path, obj, proxy_enabled))
-        .collect();
-
-    Feed {
-        id: format!("urn:oplist-opds:browse:{}", stable_id(dir_path)),
-        title: last_segment(dir_path).unwrap_or("Root").to_string(),
-        updated: updated.to_string(),
-        links,
-        entries,
-    }
+    directory_feed(
+        base_url,
+        &title,
+        dir_path,
+        route_path,
+        &self_url,
+        objects,
+        updated,
+        proxy_enabled,
+        !route_path.trim_matches('/').is_empty(),
+    )
 }
 
 /// Build a search-results acquisition feed.
 pub fn search_feed(
     base_url: &str,
+    root_path: &str,
     query: &str,
     objects: Vec<FsObject>,
     updated: &str,
@@ -133,7 +81,8 @@ pub fn search_feed(
             // Search results include the parent directory; construct the full
             // path so browse links and proxy URLs are correct.
             let dir_path = obj.parent.as_deref().unwrap_or("/").to_string();
-            fs_object_to_entry(base_url, &dir_path, obj, proxy_enabled)
+            let route_path = route_path_for_openlist_dir(&dir_path, root_path);
+            fs_object_to_entry(base_url, &dir_path, &route_path, obj, proxy_enabled)
         })
         .collect();
 
@@ -152,19 +101,67 @@ pub fn search_feed(
 // ── Helpers
 // ───────────────────────────────────────────────────────────────────
 
-fn fs_object_to_entry(base_url: &str, dir_path: &str, obj: FsObject, proxy_enabled: bool) -> Entry {
+fn directory_feed(
+    base_url: &str,
+    title: &str,
+    dir_path: &str,
+    route_path: &str,
+    self_url: &str,
+    objects: Vec<FsObject>,
+    updated: &str,
+    proxy_enabled: bool,
+    include_up: bool,
+) -> Feed {
+    let root_url = format!("{base_url}/opds");
+    let has_files = objects.iter().any(|o| !o.is_dir);
+    let feed_type = if has_files {
+        TYPE_ACQUISITION
+    } else {
+        TYPE_NAVIGATION
+    };
+
+    let mut links = vec![
+        Link::new("self", self_url, feed_type),
+        Link::new("start", &root_url, TYPE_NAVIGATION),
+    ];
+    if include_up {
+        links.push(Link::new(
+            "up",
+            &browse_url(base_url, parent_of(route_path)),
+            feed_type,
+        ));
+    }
+
+    let entries = objects
+        .into_iter()
+        .map(|obj| fs_object_to_entry(base_url, dir_path, route_path, obj, proxy_enabled))
+        .collect();
+
+    Feed {
+        id: format!("urn:oplist-opds:browse:{}", stable_id(dir_path)),
+        title: title.to_string(),
+        updated: updated.to_string(),
+        links,
+        entries,
+    }
+}
+
+fn fs_object_to_entry(
+    base_url: &str,
+    dir_path: &str,
+    route_path: &str,
+    obj: FsObject,
+    proxy_enabled: bool,
+) -> Entry {
     let full_path = if dir_path.ends_with('/') {
         format!("{}{}", dir_path, obj.name)
     } else {
         format!("{}/{}", dir_path, obj.name)
     };
+    let entry_route_path = join_route_path(route_path, &obj.name);
 
     if obj.is_dir {
-        let browse_url = format!(
-            "{}/opds/browse/{}",
-            base_url,
-            full_path.trim_start_matches('/')
-        );
+        let browse_url = browse_url(base_url, &entry_route_path);
         Entry {
             id: format!("urn:oplist-opds:{}", stable_id(&full_path)),
             title: obj.name,
@@ -178,11 +175,7 @@ fn fs_object_to_entry(base_url: &str, dir_path: &str, obj: FsObject, proxy_enabl
         // When disabled, link directly to OpenList's raw_url if available,
         // falling back to the proxy URL if raw_url is empty.
         let download_url = if proxy_enabled || obj.raw_url.is_empty() {
-            format!(
-                "{}/opds/raw/{}",
-                base_url,
-                full_path.trim_start_matches('/')
-            )
+            format!("{}/opds/raw/{}", base_url, entry_route_path)
         } else {
             obj.raw_url
         };
@@ -224,6 +217,50 @@ fn last_segment(path: &str) -> Option<&str> {
         .rsplit('/')
         .next()
         .filter(|s| !s.is_empty())
+}
+
+fn browse_url(base_url: &str, route_path: &str) -> String {
+    let route_path = route_path.trim_matches('/');
+    if route_path.is_empty() {
+        format!("{base_url}/opds/browse/")
+    } else {
+        format!("{base_url}/opds/browse/{route_path}")
+    }
+}
+
+fn join_route_path(route_path: &str, name: &str) -> String {
+    let route_path = route_path.trim_matches('/');
+    let name = name.trim_matches('/');
+    if route_path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{route_path}/{name}")
+    }
+}
+
+fn route_path_for_openlist_dir(dir_path: &str, root_path: &str) -> String {
+    let root = normalize_abs_path(root_path);
+    let dir = normalize_abs_path(dir_path);
+    if root == "/" {
+        return dir.trim_start_matches('/').to_string();
+    }
+
+    if dir == root {
+        String::new()
+    } else if let Some(child) = dir.strip_prefix(&format!("{root}/")) {
+        child.trim_matches('/').to_string()
+    } else {
+        dir.trim_matches('/').to_string()
+    }
+}
+
+fn normalize_abs_path(path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{trimmed}")
+    }
 }
 
 fn urlencoded(s: &str) -> String {

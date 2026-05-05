@@ -31,6 +31,7 @@ pub async fn handle_browse(
     let feed = browse_feed(
         &state.config.base_url,
         &dir_path,
+        rel,
         listing.content,
         &updated,
         state.config.proxy_enabled,

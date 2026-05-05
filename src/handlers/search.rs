@@ -42,6 +42,7 @@ pub async fn handle_search(
 
     let feed = search_feed(
         &state.config.base_url,
+        &state.config.root_path,
         &query,
         results.content,
         &updated,
